@@ -3,11 +3,44 @@ from datetime import datetime, timezone
 from app.db import 连接
 
 建表 = """
+-- 跨日水位账（甲口径：水位钉价值日）。每一笔「到达营业日 > 价值日」的迟到流水
+-- 必须与流水同票落一行，记录 水位号/流水号/价值日/到达营业日/归属日/valid。
 CREATE TABLE IF NOT EXISTS 跨日水位账表 (
   编号 INTEGER PRIMARY KEY AUTOINCREMENT,
-  水位号 TEXT, 流水号 TEXT, 价值日 TEXT, 到达日 TEXT, 归属日 TEXT, 状态 TEXT,
+  水位号 TEXT NOT NULL DEFAULT '',
+  流水号 TEXT NOT NULL DEFAULT '',
+  账户键 TEXT NOT NULL DEFAULT '',
+  价值日 TEXT NOT NULL DEFAULT '',
+  到达日 TEXT NOT NULL DEFAULT '',
+  归属日 TEXT NOT NULL DEFAULT '',
+  装载批次编号 TEXT NOT NULL DEFAULT '',
+  结算批次编号 TEXT NOT NULL DEFAULT '',
+  状态 TEXT NOT NULL DEFAULT '待归位',
+  valid INTEGER NOT NULL DEFAULT 1,
   时刻 TEXT NOT NULL DEFAULT '',
+  处置时刻 TEXT NOT NULL DEFAULT '',
   载荷 TEXT NOT NULL DEFAULT '{}'
+);
+
+-- 营业日封印：封印后该营业日正式镜冻结，装载/抽取均须先持解封手续。
+CREATE TABLE IF NOT EXISTS 营业日封印 (
+  营业日 TEXT PRIMARY KEY,
+  状态 TEXT NOT NULL DEFAULT '已封印',
+  封印批次编号 TEXT NOT NULL DEFAULT '',
+  封印时刻 TEXT NOT NULL DEFAULT '',
+  解封批次编号 TEXT NOT NULL DEFAULT '',
+  解封时刻 TEXT NOT NULL DEFAULT '',
+  解封手续 TEXT NOT NULL DEFAULT '',
+  valid INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS 封印手续 (
+  编号 INTEGER PRIMARY KEY AUTOINCREMENT,
+  营业日 TEXT NOT NULL,
+  动作 TEXT NOT NULL,
+  手续编号 TEXT NOT NULL DEFAULT '',
+  理由 TEXT NOT NULL DEFAULT '',
+  批次编号 TEXT NOT NULL DEFAULT '',
+  时刻 TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS 台参 (
@@ -21,10 +54,14 @@ CREATE TABLE IF NOT EXISTS 账户 (
   开户营业日 TEXT NOT NULL,
   状态 TEXT NOT NULL DEFAULT '正常'
 );
+-- 变动流水：营业日即价值日；到达日 = 该笔被装入时的营业日（跨日水位账据此判定）。
+-- 跨日流水必须带水位号，否则抽取/回放拒绝（禁止跨日迟到无水位账）。
 CREATE TABLE IF NOT EXISTS 变动流水 (
   流水号 TEXT PRIMARY KEY,
   账户键 TEXT NOT NULL,
   营业日 TEXT NOT NULL,
+  到达日 TEXT NOT NULL DEFAULT '',
+  水位号 TEXT NOT NULL DEFAULT '',
   发生时 TEXT NOT NULL,
   变动额 INTEGER NOT NULL,
   摘要 TEXT NOT NULL DEFAULT '',
@@ -152,6 +189,39 @@ def 此刻() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _加列(conn, 表: str, 列定义: dict[str, str]) -> None:
+    """旧库补列：缺哪列补哪列，默认值保证老行可读。"""
+    存在 = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (表,)
+    ).fetchone()
+    if 存在 is None:
+        return
+    列 = {r["name"] for r in conn.execute(f"PRAGMA table_info({表})")}
+    for 名, 型 in 列定义.items():
+        if 名 not in 列:
+            conn.execute(f"ALTER TABLE {表} ADD COLUMN {名} {型}")
+
+
+def _迁移水位与流水(conn) -> None:
+    """旧库补齐跨日水位账与变动流水的新列（到达日/水位号/valid…）。"""
+    _加列(
+        conn,
+        "变动流水",
+        {"到达日": "TEXT NOT NULL DEFAULT ''", "水位号": "TEXT NOT NULL DEFAULT ''"},
+    )
+    _加列(
+        conn,
+        "跨日水位账表",
+        {
+            "账户键": "TEXT NOT NULL DEFAULT ''",
+            "装载批次编号": "TEXT NOT NULL DEFAULT ''",
+            "结算批次编号": "TEXT NOT NULL DEFAULT ''",
+            "valid": "INTEGER NOT NULL DEFAULT 1",
+            "处置时刻": "TEXT NOT NULL DEFAULT ''",
+        },
+    )
+
+
 def _迁移版本链快照(conn) -> None:
     """旧库（每账日唯一行）迁移为版本链：既有有效行即 v1 基线且当前。"""
     表 = conn.execute(
@@ -195,9 +265,16 @@ FROM 周期快照_旧版
 def 初始化库() -> None:
     conn = 连接()
     conn.executescript(建表)
+    _迁移水位与流水(conn)
     _迁移版本链快照(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS 快照当前镜 ON 周期快照(账户键, 营业日, 是否当前)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS 水位流水 ON 跨日水位账表(流水号)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS 水位归属 ON 跨日水位账表(归属日, 到达日)"
     )
     if conn.execute("SELECT COUNT(*) AS c FROM 台参").fetchone()["c"] == 0:
         for k, v in {
@@ -207,6 +284,7 @@ def 初始化库() -> None:
             "断档处置": "记断档并继续",
             "缺前日策略": "以零为开端",
             "重复抽取": "盖写同日快照",
+            "跨日水位口径": "水位钉价值日",
         }.items():
             conn.execute("INSERT INTO 台参(键, 值) VALUES (?, ?)", (k, v))
     if conn.execute("SELECT COUNT(*) AS c FROM 账户").fetchone()["c"] == 0:

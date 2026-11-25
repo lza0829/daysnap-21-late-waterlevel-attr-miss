@@ -45,3 +45,42 @@ CREATE TABLE 周期快照 (
         ).fetchone()["c"] == 1
     finally:
         conn.close()
+
+
+def test_旧水位与流水表补列(库):
+    """旧库的 跨日水位账表/变动流水 缺新列时，初始化须补列且老行可读。"""
+    from app import seed
+
+    conn = 连接()
+    conn.execute("DROP TABLE 变动流水")
+    conn.execute(
+        "CREATE TABLE 变动流水 (流水号 TEXT PRIMARY KEY, 账户键 TEXT NOT NULL, 营业日 TEXT NOT NULL, "
+        "发生时 TEXT NOT NULL, 变动额 INTEGER NOT NULL, 摘要 TEXT NOT NULL DEFAULT '', "
+        "批次编号 TEXT NOT NULL DEFAULT '', 命运 TEXT NOT NULL DEFAULT '已入账')"
+    )
+    conn.execute(
+        "INSERT INTO 变动流水(流水号,账户键,营业日,发生时,变动额) VALUES ('老-1','户甲','2026-11-01','x',1)"
+    )
+    conn.execute("DROP TABLE 跨日水位账表")
+    conn.execute(
+        "CREATE TABLE 跨日水位账表 (编号 INTEGER PRIMARY KEY AUTOINCREMENT, 水位号 TEXT, 流水号 TEXT, "
+        "价值日 TEXT, 到达日 TEXT, 归属日 TEXT, 状态 TEXT, 时刻 TEXT NOT NULL DEFAULT '', "
+        "载荷 TEXT NOT NULL DEFAULT '{}')"
+    )
+    conn.commit()
+    conn.close()
+
+    seed.初始化库()
+    conn = 连接()
+    try:
+        流水列 = {r["name"] for r in conn.execute("PRAGMA table_info(变动流水)")}
+        assert {"到达日", "水位号"} <= 流水列
+        老 = conn.execute("SELECT * FROM 变动流水 WHERE 流水号='老-1'").fetchone()
+        assert 老["到达日"] == "" and 老["水位号"] == ""
+        水位列 = {r["name"] for r in conn.execute("PRAGMA table_info(跨日水位账表)")}
+        assert {"账户键", "装载批次编号", "结算批次编号", "valid", "处置时刻"} <= 水位列
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM sqlite_master WHERE type='table' AND name='营业日封印'"
+        ).fetchone()["c"] == 1
+    finally:
+        conn.close()

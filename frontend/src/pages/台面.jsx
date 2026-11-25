@@ -50,6 +50,8 @@ export default function 台面() {
         <div className="阶"><div className="序">快照</div><b>{o.快照数 ?? "—"}</b><span>当前镜/版本{o.快照版本数 ?? "—"}</span></div>
         <div className="阶"><div className="序">待处置</div><b>{o.迟到待处置 ?? "—"}</b><span>迟到未纠偏</span></div>
         <div className="阶"><div className="序">已纠偏</div><b>{o.迟到已纠偏 ?? "—"}</b><span>版本链证据</span></div>
+        <div className="阶"><div className="序">水位</div><b>{o.跨日水位 ?? "—"}</b><span>待归位 {o.水位待归位 ?? "—"}</span></div>
+        <div className="阶"><div className="序">封印</div><b>{o.封印营业日 ?? "—"}</b><span>已封印营业日</span></div>
         <div className="阶"><div className="序">差额</div><b>{o.差额行数 ?? "—"}</b><span>清单行</span></div>
         <div className="阶"><div className="序">旁置</div><b>{o.旁置数 ?? "—"}</b><span>未入账</span></div>
       </div>

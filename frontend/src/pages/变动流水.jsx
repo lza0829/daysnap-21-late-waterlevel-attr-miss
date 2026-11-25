@@ -52,8 +52,11 @@ export default function 变动流水() {
               <th>变动额</th>
               <th>摘要</th>
               <th>命运</th>
+              <th>到达</th>
               <th>迟到处置</th>
               <th>valid</th>
+              <th>水位号</th>
+              <th>归属日</th>
             </tr>
           </thead>
           <tbody>
@@ -66,6 +69,13 @@ export default function 变动流水() {
                 <td>{r.摘要}</td>
                 <td>{r.命运}</td>
                 <td>
+                  {r.到达日 && r.到达日 !== r.营业日 ? (
+                    <span className="徽章 败">跨日·到达{r.到达日}</span>
+                  ) : (
+                    "同日"
+                  )}
+                </td>
+                <td>
                   {r.迟到状态 ? (
                     <span className={`徽章 ${r.迟到状态 === "已纠偏" ? "通" : "败"}`}>
                       {r.迟到状态}#{r.迟到处置编号}
@@ -75,6 +85,14 @@ export default function 变动流水() {
                   )}
                 </td>
                 <td>{r.迟到valid ?? "—"}</td>
+                <td>
+                  {r.水位账号 ? (
+                    <span className={`徽章 ${r.水位状态 === "已归位" ? "通" : "败"}`}>{r.水位账号}</span>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td>{r.水位归属日 || "—"}</td>
               </tr>
             ))}
           </tbody>
